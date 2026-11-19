@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Armador de paquetes Amazon</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<!--STYLE--><link rel="stylesheet" href="assets/app.css"><!--/STYLE-->
+</head>
+<body>
+<!-- Pantalla de acceso: toda la página pide contraseña (assets/auth.js) -->
+<main class="login" id="login-screen" hidden>
+  <form id="login-form" class="login-card stack" novalidate>
+    <h1>Armador de paquetes Amazon</h1>
+    <p class="muted" id="login-lede">Escribe la contraseña de administración.</p>
+    <label for="login-pass" id="login-pass-wrap"><span class="lbl">Contraseña</span>
+      <input type="password" id="login-pass" autocomplete="current-password" maxlength="200">
+    </label>
+    <label for="login-pass2" id="login-pass2-wrap" hidden><span class="lbl">Repite la contraseña</span>
+      <input type="password" id="login-pass2" autocomplete="new-password" maxlength="200">
+    </label>
+    <div class="field-error" id="login-error" role="alert"></div>
+    <button type="submit" class="primary" id="login-submit">Entrar</button>
+  </form>
+</main>
+
+<div class="wrap" id="app" hidden>
+
+  <header class="top">
+    <div>
+      <h1>Armador de paquetes Amazon</h1>
+      <p class="lede">Productos de amazon.com agrupados en paquetes de 3 o más, con tus enlaces de afiliado.</p>
+    </div>
+    <div class="top-right">
+      <span class="chip" id="chip-sync"><span class="dot"></span><b>Conectando…</b></span>
+      <button type="button" class="chip chip-btn" id="btn-settings" title="Tag de afiliado e importación">
+        <span class="dot" id="tag-dot"></span><span id="tag-chip">Tag de afiliado</span> · Ajustes
+      </button>
+      <button type="button" class="chip chip-btn" id="btn-logout">Cerrar sesión</button>
+    </div>
+  </header>
+
+  <div class="banner" id="banner" role="alert" hidden></div>
+
+  <nav class="stepper" aria-label="Proceso">
+    <a href="#catalogo" class="step" id="tab-catalogo" data-view="catalogo">
+      <span class="num">1</span>
+      <span class="step-text"><b>Catálogo</b><small id="tab-catalogo-sub">Agrega productos</small></span>
+    </a>
+    <a href="#armar" class="step" id="tab-armar" data-view="armar">
+      <span class="num">2</span>
+      <span class="step-text"><b>Armar paquete</b><small id="tab-armar-sub">Elige 3 productos o más</small></span>
+    </a>
+    <a href="#paquetes" class="step" id="tab-paquetes" data-view="paquetes">
+      <span class="num">3</span>
+      <span class="step-text"><b>Paquetes guardados</b><small id="tab-paquetes-sub">Consulta y comparte</small></span>
+    </a>
+  </nav>
+
+  <!-- 1. CATÁLOGO -->
+  <section class="view" id="view-catalogo" aria-labelledby="h-catalogo">
+    <div class="view-head">
+      <div>
+        <h2 id="h-catalogo">Catálogo de productos</h2>
+        <p class="muted small">Tu lista maestra. Un mismo producto puede usarse en varios paquetes; al eliminarlo se quita de todos.</p>
+      </div>
+      <button type="button" class="primary" id="btn-add-product">+ Agregar producto</button>
+    </div>
+    <div class="callout" id="cat-callout" hidden></div>
+    <div class="toolbar">
+      <input type="search" id="cat-q" placeholder="Buscar por nombre, ASIN o marca" aria-label="Buscar productos">
+      <select id="cat-filter" aria-label="Filtrar por categoría"><option value="">Todas las categorías</option></select>
+      <select id="cat-usage" aria-label="Filtrar por uso">
+        <option value="">Con o sin paquete</option>
+        <option value="used">En algún paquete</option>
+        <option value="unused">Sin paquete</option>
+      </select>
+      <button type="button" id="btn-cats">Categorías</button>
+    </div>
+    <div class="list" id="cat-list"></div>
+    <div class="pager" id="cat-pager"></div>
+  </section>
+
+  <!-- 2. ARMAR PAQUETE -->
+  <section class="view" id="view-armar" aria-labelledby="bd-title" hidden>
+    <div class="view-head">
+      <div>
+        <span class="eyebrow" id="bd-mode">Paquete nuevo</span>
+        <h2 id="bd-title">Arma un paquete</h2>
+      </div>
+      <button type="button" id="bd-cancel">Cancelar</button>
+    </div>
+    <div class="builder">
+      <div class="panel">
+        <div class="panel-head">
+          <h3>1. Elige productos del catálogo</h3>
+          <span class="small muted" id="pick-count"></span>
+        </div>
+        <input type="search" id="pick-q" placeholder="Buscar en el catálogo" aria-label="Buscar productos para el paquete">
+        <div class="pick-list" id="pick-list"></div>
+      </div>
+      <div class="panel sticky" id="bd-panel">
+        <h3>2. Datos del paquete</h3>
+        <label for="bd-name"><span class="lbl">Nombre del paquete <span class="req">obligatorio</span></span>
+          <input id="bd-name" maxlength="150" placeholder="Ej.: Kit de café en casa" autocomplete="off">
+        </label>
+        <label for="bd-desc"><span class="lbl">Descripción para el cliente <span class="hint">opcional</span></span>
+          <input id="bd-desc" maxlength="500" placeholder="Ej.: Todo para preparar café de especialidad" autocomplete="off">
+        </label>
+        <div class="bd-items" id="bd-items"></div>
+        <div class="totals">
+          <span class="small muted" id="bd-priced">Sin productos</span>
+          <span class="total" id="bd-total">$0.00</span>
+        </div>
+        <ul class="checklist" id="bd-check" aria-label="Requisitos para guardar"></ul>
+        <div class="field-error" id="bd-error" role="alert"></div>
+        <button type="button" class="primary wide" id="bd-save" disabled>Guardar paquete</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. PAQUETES GUARDADOS -->
+  <section class="view" id="view-paquetes" aria-labelledby="h-paquetes" hidden>
+    <div class="view-head">
+      <div>
+        <h2 id="h-paquetes">Paquetes guardados</h2>
+        <p class="muted small">Abre un paquete para ver sus productos, mandarlo al carrito o copiar los enlaces.</p>
+      </div>
+      <button type="button" class="primary" id="btn-new-bundle">+ Nuevo paquete</button>
+    </div>
+    <div class="callout ok" id="bun-callout" role="status" hidden></div>
+    <div class="toolbar">
+      <input type="search" id="bun-q" placeholder="Buscar por nombre de paquete o producto" aria-label="Buscar paquetes">
+      <select id="bun-sort" aria-label="Ordenar paquetes">
+        <option value="recent">Más recientes</option>
+        <option value="name">Nombre (A–Z)</option>
+        <option value="total">Mayor total</option>
+        <option value="items">Más productos</option>
+      </select>
+    </div>
+    <div class="list" id="bun-list"></div>
+    <div class="pager" id="bun-pager"></div>
+  </section>
+
+  <footer class="notes">
+    <p>Los precios son de referencia y los capturan ustedes; Amazon cobra el precio vigente al comprar. “Agregar todo al carrito” usa el formulario de carrito de Amazon con varios ASIN: verifiquen que la comisión se registre en Associates.</p>
+  </footer>
+</div>
+
+<!-- Diálogo: alta / edición de producto -->
+<dialog id="dlg-product" aria-labelledby="dp-title">
+  <form id="product-form" novalidate>
+    <div class="dlg-head">
+      <h2 id="dp-title">Agregar producto al catálogo</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Cerrar">×</button>
+    </div>
+    <div class="dlg-body">
+      <label for="f-url"><span class="lbl">Enlace de amazon.com o ASIN <span class="req">obligatorio</span></span>
+        <input id="f-url" placeholder="Ej.: https://www.amazon.com/dp/B0047BIWSK" autocomplete="off" spellcheck="false">
+      </label>
+      <div class="asin-preview" id="asin-preview">Pega la URL completa del producto; el ASIN se detecta solo.</div>
+      <details class="fold autofill" id="f-auto">
+        <summary>Autocompletar con la página de Amazon <span class="hint">llena nombre, precio, categoría y detalles</span></summary>
+        <div class="fold-body">
+          <ol class="mini-steps">
+            <li><a id="f-open-amazon" class="btn" target="_blank" rel="noopener" href="#" aria-disabled="true">Abrir el producto en Amazon ↗</a> <span class="hint" id="f-open-hint">Primero pega el enlace o ASIN arriba.</span></li>
+            <li>En la página de Amazon presiona <kbd>Ctrl</kbd>+<kbd>A</kbd> y luego <kbd>Ctrl</kbd>+<kbd>C</kbd> <span class="hint">(en Mac, <kbd>⌘</kbd> en lugar de Ctrl)</span>.</li>
+            <li>Vuelve aquí, haz clic en el cuadro y presiona <kbd>Ctrl</kbd>+<kbd>V</kbd>. Los campos se llenan solos para que los revises.</li>
+          </ol>
+          <textarea id="f-paste" class="paste" spellcheck="false" placeholder="Pega aquí la página del producto (Ctrl+V)" aria-label="Contenido copiado de la página del producto en Amazon"></textarea>
+          <div class="autofill-result" id="f-auto-result" role="status" hidden></div>
+          <div class="actions">
+            <button type="button" id="f-extract" disabled>Extraer datos</button>
+            <button type="button" class="link" id="f-undo" hidden>Deshacer autocompletado</button>
+          </div>
+        </div>
+      </details>
+      <label for="f-title"><span class="lbl">Nombre del producto <span class="req">obligatorio</span></span>
+        <input id="f-title" maxlength="300" placeholder="Ej.: Vitamix 5200 – licuadora profesional" autocomplete="off">
+      </label>
+      <div class="field-note" id="f-title-note" hidden>Borrador tomado del enlace. Revísalo o usa “Autocompletar” para el nombre exacto.</div>
+      <div class="row2">
+        <label for="f-price"><span class="lbl">Precio de referencia (USD) <span class="hint">opcional</span></span>
+          <input id="f-price" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Ej.: 429.99">
+        </label>
+        <div class="cat-field">
+          <label for="f-cat"><span class="lbl">Categoría <span class="hint">opcional</span></span>
+            <select id="f-cat"></select>
+          </label>
+          <div class="cat-new" id="f-cat-new" hidden>
+            <input id="f-cat-name" maxlength="100" placeholder="Ej.: Licuadoras" aria-label="Nombre de la nueva categoría" autocomplete="off">
+            <button type="button" class="primary" id="f-cat-add">Agregar</button>
+            <button type="button" class="link" id="f-cat-cancel">Cancelar</button>
+          </div>
+        </div>
+      </div>
+      <div class="cat-suggest" id="f-cat-suggest" hidden></div>
+      <details class="fold" id="f-details">
+        <summary>Detalles del producto <span class="hint">Marca, color, capacidad, dimensiones, “Sobre este artículo”</span></summary>
+        <div class="fold-body">
+          <div class="row2">
+            <label for="f-brand">Marca<input id="f-brand" maxlength="100" placeholder="Ej.: Vitamix" autocomplete="off"></label>
+            <label for="f-color">Color<input id="f-color" maxlength="60" placeholder="Ej.: Rojo" autocomplete="off"></label>
+          </div>
+          <div class="row2">
+            <label for="f-feature">Característica especial<input id="f-feature" maxlength="150" placeholder="Ej.: Mezclas" autocomplete="off"></label>
+            <label for="f-capacity">Capacidad<input id="f-capacity" maxlength="60" placeholder="Ej.: 64 onzas fluidas" autocomplete="off"></label>
+          </div>
+          <label for="f-dims"><span class="lbl">Dimensiones del producto <span class="hint">profundidad x ancho x alto</span></span>
+            <input id="f-dims" maxlength="120" placeholder="Ej.: 8.75 x 7.25 x 20.5 pulgadas" autocomplete="off">
+          </label>
+          <label for="f-about"><span class="lbl">Sobre este artículo <span class="hint">un punto por línea; se muestra como lista</span></span>
+            <textarea id="f-about" class="prose" maxlength="5000" placeholder="Ej.: Motor de 2 HP con cuchillas de acero inoxidable&#10;Ej.: Vaso de 64 oz libre de BPA"></textarea>
+          </label>
+        </div>
+      </details>
+      <details class="fold" id="f-extra">
+        <summary>Foto y notas internas <span class="hint">opcional</span></summary>
+        <div class="fold-body">
+          <div class="photo-row">
+            <div class="thumb" id="f-thumb" aria-hidden="true"></div>
+            <div class="photo-ctl">
+              <label for="f-img"><span class="lbl">Foto propia <span class="hint">las imágenes de Amazon solo se deben mostrar vía API</span></span>
+                <input id="f-img" type="file" accept="image/*">
+              </label>
+              <button type="button" class="link danger" id="f-img-remove" hidden>Quitar foto</button>
+            </div>
+          </div>
+          <label for="f-notes">Notas internas<input id="f-notes" maxlength="500" placeholder="Ej.: variante preferida, por qué encaja en un paquete" autocomplete="off"></label>
+        </div>
+      </details>
+      <div class="field-error" id="form-error" role="alert"></div>
+    </div>
+    <div class="dlg-foot">
+      <span class="small muted" id="form-hint">Completa el ASIN y el nombre para guardar.</span>
+      <div class="actions">
+        <button type="button" data-close>Cancelar</button>
+        <button type="button" id="f-save-another" disabled>Guardar y agregar otro</button>
+        <button type="submit" class="primary" id="f-submit" disabled>Guardar producto</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+<!-- Diálogo: categorías -->
+<dialog id="dlg-cats" aria-labelledby="dk-title">
+  <div class="dlg-head">
+    <h2 id="dk-title">Categorías</h2>
+    <button type="button" class="icon-btn" data-close aria-label="Cerrar">×</button>
+  </div>
+  <div class="dlg-body">
+    <form id="cat-form" class="inline" novalidate>
+      <input id="cat-new-name" maxlength="100" placeholder="Ej.: Licuadoras" aria-label="Nueva categoría" autocomplete="off">
+      <button type="submit" class="primary">Agregar categoría</button>
+    </form>
+    <div class="field-error" id="cat-error" role="alert"></div>
+    <div class="cat-list" id="cat-manage"></div>
+    <p class="small muted">Renombrar una categoría actualiza todos sus productos. Eliminarla deja a sus productos “Sin categoría”.</p>
+  </div>
+</dialog>
+
+<!-- Diálogo: confirmación -->
+<dialog id="dlg-confirm" aria-labelledby="dc-title">
+  <form method="dialog">
+    <div class="dlg-head"><h2 id="dc-title">¿Confirmar?</h2></div>
+    <div class="dlg-body" id="dc-body"></div>
+    <div class="dlg-foot">
+      <span></span>
+      <div class="actions">
+        <button value="cancel" id="dc-cancel">Cancelar</button>
+        <button value="ok" class="primary" id="dc-ok">Confirmar</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+<!-- Diálogo: ajustes -->
+<dialog id="dlg-settings" aria-labelledby="ds-title">
+  <div class="dlg-head">
+    <h2 id="ds-title">Ajustes</h2>
+    <button type="button" class="icon-btn" data-close aria-label="Cerrar">×</button>
+  </div>
+  <div class="dlg-body">
+    <form id="tag-form" class="stack">
+      <label for="tag-input"><span class="lbl">Tag de afiliado (Amazon Associates) <span class="hint">Se agrega a cada enlace como ?tag=. Sin tag, los enlaces no generan comisión.</span></span>
+        <div class="inline">
+          <input id="tag-input" placeholder="Ej.: tutienda-20" autocomplete="off" spellcheck="false">
+          <button type="submit" class="primary">Guardar tag</button>
+        </div>
+      </label>
+      <div class="small muted" id="tag-status"></div>
+    </form>
+    <hr>
+    <div class="stack">
+      <h3>Importar o exportar productos (JSON)</h3>
+      <p class="small muted">Punto de conexión con la Creators API: un script del servidor genera esta lista con <span class="mono">GetItems</span>. Las credenciales nunca van en el navegador.</p>
+      <textarea id="json-io" spellcheck="false" placeholder='[{"asin":"B00BY0A8Y8","title":"Vitamix 5200","brand":"Vitamix","price":429.99}]'></textarea>
+      <div class="field-error" id="json-error" role="alert"></div>
+      <div class="actions">
+        <button type="button" id="json-import">Importar productos</button>
+        <button type="button" id="json-export">Mostrar catálogo como JSON</button>
+        <button type="button" id="json-copy">Copiar</button>
+      </div>
+    </div>
+    <hr>
+    <form id="pass-form" class="stack">
+      <h3>Cambiar contraseña de administración</h3>
+      <label for="pass-current"><span class="lbl">Contraseña actual</span>
+        <input type="password" id="pass-current" autocomplete="current-password" required maxlength="200">
+      </label>
+      <label for="pass-new"><span class="lbl">Nueva contraseña <span class="hint">Mínimo 8 caracteres.</span></span>
+        <input type="password" id="pass-new" autocomplete="new-password" required minlength="8" maxlength="200">
+      </label>
+      <label for="pass-repeat"><span class="lbl">Repite la nueva contraseña</span>
+        <input type="password" id="pass-repeat" autocomplete="new-password" required minlength="8" maxlength="200">
+      </label>
+      <div class="actions"><button type="submit">Cambiar contraseña</button></div>
+      <div class="small muted" id="pass-status" role="status"></div>
+    </form>
+  </div>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<!--SCRIPTS--><script src="assets/amazon-parse.js"></script>
+<script src="assets/auth.js"></script>
+<script src="assets/store-api.js"></script>
+<script src="assets/app.js"></script><!--/SCRIPTS-->
+</body>
+</html>

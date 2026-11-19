@@ -1,0 +1,14 @@
+.git
+.gitignore
+.claude
+.codex
+.kimi-code
+.gateguard
+.vscode
+node_modules
+data/*.sqlite*
+
+# Notas locales con contraseñas: nunca a la imagen
+datos.txt
+*.env
+.env

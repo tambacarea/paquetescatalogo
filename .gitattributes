@@ -1,0 +1,4 @@
+# Scripts y configuración que se ejecutan en Linux (Docker/Coolify): siempre con fin de línea LF
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker/* text eol=lf

@@ -1,0 +1,7 @@
+# Base SQLite local (solo si DB_DRIVER = "sqlite")
+data/*.sqlite*
+
+# Notas locales con contraseñas: no subir a GitHub
+datos.txt
+.env
+*.env
