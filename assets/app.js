@@ -77,7 +77,37 @@
   function initials(title) {
     return (String(title || "?").match(/[A-Za-zÁÉÍÓÚÑáéíóúñ0-9]+/g) || ["?"]).slice(0, 2).map((w) => w[0].toUpperCase()).join("");
   }
-  const thumbHtml = (p) => `<div class="thumb" aria-hidden="true">${p.image ? `<img src="${esc(p.image)}" alt="">` : esc(initials(p.title))}</div>`;
+  // Miniatura con tamaño declarado (no mueve la página al cargar) y carga diferida fuera de pantalla.
+  const thumbHtml = (p, size = 52) => `<div class="thumb" aria-hidden="true">${p.image
+    ? `<img src="${esc(p.image)}" alt="" width="${size}" height="${size}" loading="lazy" decoding="async">`
+    : esc(initials(p.title))}</div>`;
+
+  // Espera a que la persona deje de escribir antes de filtrar (búsquedas).
+  const debounce = (fn, ms = 250) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+
+  // El lector de la ficha de Amazon solo hace falta en "Agregar producto": se descarga al abrir ese diálogo.
+  let parserPromise = null;
+  function loadParser() {
+    if (window.AmazonParse) return Promise.resolve();
+    if (!parserPromise) {
+      parserPromise = new Promise((resolve, reject) => {
+        const meta = document.querySelector('meta[name="pqc-parser"]');
+        const s = document.createElement("script");
+        s.src = meta ? meta.content : "assets/amazon-parse.js";
+        s.onload = resolve;
+        s.onerror = () => { parserPromise = null; reject(new Error("No se pudo cargar el lector de Amazon.")); };
+        document.head.appendChild(s);
+      });
+    }
+    return parserPromise;
+  }
+
+  // Filas "esqueleto" con la forma del contenido mientras llegan los datos.
+  const skeletonRows = (n, kind) => Array.from({ length: n }, () => `<div class="row sk-row ${kind}" aria-hidden="true">
+      ${kind === "prod" ? '<span class="sk sk-thumb"></span>' : '<span class="sk sk-chev"></span>'}
+      <span class="sk-lines"><span class="sk sk-line w70"></span><span class="sk sk-line w40"></span></span>
+      <span class="sk sk-pill"></span>
+    </div>`).join("");
   function bundleItems(b) { return (b.items || []).filter((i) => S.products.has(i.pid)); }
   function bundleTotals(items) {
     let total = 0, priced = 0;
@@ -252,7 +282,8 @@
 
     const list = filteredProducts();
     const ro = Store.readOnly && Store.readOnly();
-    if (!S.ready) { $("cat-list").innerHTML = `<div class="empty">Cargando catálogo…</div>`; $("cat-pager").innerHTML = ""; return; }
+    if (!S.ready) { $("cat-list").innerHTML = skeletonRows(6, "prod"); $("cat-list").setAttribute("aria-busy", "true"); $("cat-pager").innerHTML = ""; return; }
+    $("cat-list").removeAttribute("aria-busy");
     if (!n) {
       $("cat-list").innerHTML = `<div class="empty"><b>Tu catálogo está vacío.</b><span>Agrega el primer producto con su enlace de amazon.com.</span>
         <button type="button" class="primary" data-act="add">+ Agregar producto</button></div>`;
@@ -262,7 +293,11 @@
       $("cat-list").innerHTML = `<div class="empty">Ningún producto coincide con la búsqueda.<button type="button" data-act="clear-filters">Quitar filtros</button></div>`;
       $("cat-pager").innerHTML = ""; return;
     }
-    S.cat.page = pager($("cat-pager"), list.length, S.cat.page, (p) => { S.cat.page = p; renderCatalog(); scrollTo($("cat-list")); }, "productos");
+    if (S.cat.highlight) {
+      const idx = list.findIndex((p) => p.id === S.cat.highlight);
+      if (idx >= 0) S.cat.page = Math.floor(idx / PAGE) + 1;
+    }
+    S.cat.page = pager($("cat-pager"), list.length, S.cat.page, (p) => { S.cat.page = p; S.cat.highlight = null; renderCatalog(); scrollTo($("cat-list")); }, "productos");
     const pageItems = list.slice((S.cat.page - 1) * PAGE, S.cat.page * PAGE);
 
     $("cat-list").innerHTML = pageItems.map((p) => {
@@ -270,7 +305,7 @@
       const open = S.cat.open.has(p.id);
       const specs = DETAIL_FIELDS.filter(([f]) => p[f]).map(([f, , l]) => `<dt>${l}</dt><dd>${esc(p[f])}</dd>`).join("");
       const about = aboutLines(p.about);
-      return `<article class="row prod${S.editingProductId === p.id ? " editing" : ""}" data-id="${esc(p.id)}">
+      return `<article class="row prod${S.editingProductId === p.id ? " editing" : ""}${S.cat.highlight === p.id ? " highlight" : ""}" data-id="${esc(p.id)}">
         ${thumbHtml(p)}
         <div class="r-main">
           <span class="r-title">${esc(p.title)}</span>
@@ -304,9 +339,13 @@
         </div>` : ""}
       </article>`;
     }).join("");
+    if (S.cat.scrollTo && S.cat.highlight) {
+      S.cat.scrollTo = false;
+      scrollTo(document.querySelector(`.prod[data-id="${CSS.escape(S.cat.highlight)}"]`), "center");
+    }
   }
 
-  $("cat-q").addEventListener("input", () => { S.cat.q = $("cat-q").value; S.cat.page = 1; renderCatalog(); });
+  $("cat-q").addEventListener("input", debounce(() => { S.cat.q = $("cat-q").value; S.cat.page = 1; renderCatalog(); }));
   $("cat-filter").addEventListener("change", () => { S.cat.category = $("cat-filter").value; S.cat.page = 1; renderCatalog(); });
   $("cat-usage").addEventListener("change", () => { S.cat.usage = $("cat-usage").value; S.cat.page = 1; renderCatalog(); });
   $("btn-add-product").addEventListener("click", () => openProductDialog(null));
@@ -338,12 +377,22 @@
       if (short.length) body += `<p class="small muted" style="margin-top:10px">Los paquetes que queden con menos de ${MIN()} productos se marcarán como incompletos para que los completes.</p>`;
     } else body += `<p class="small muted" style="margin-top:8px">No está en ningún paquete.</p>`;
     if (!(await confirmDialog({ title: "¿Eliminar producto?", body, ok: "Eliminar producto", danger: true }))) return;
+    // Interfaz optimista: desaparece de inmediato; si el servidor falla, se restaura.
+    const before = { products: new Map(S.products), bundles: new Map(S.bundles), draftItems: S.draft ? [...S.draft.items] : null };
+    S.products.delete(id);
+    S.bundles = new Map([...S.bundles].map(([bid, b]) => [bid, { ...b, items: (b.items || []).filter((i) => i.pid !== id) }]));
+    if (S.draft) S.draft.items = S.draft.items.filter((i) => i.pid !== id);
+    S.cat.open.delete(id);
+    render();
+    toast("Producto eliminado");
     try {
       await Store.deleteProduct(id);
-      S.cat.open.delete(id);
-      if (S.draft) S.draft.items = S.draft.items.filter((i) => i.pid !== id);
-      toast("Producto eliminado");
-    } catch (ex) { toast(ex.message); }
+    } catch (ex) {
+      S.products = before.products; S.bundles = before.bundles;
+      if (S.draft && before.draftItems) S.draft.items = before.draftItems;
+      render();
+      toast(`No se pudo eliminar; se restauró. ${ex.message}`);
+    }
   }
 
   // ---------- Diálogo de producto (alta / edición) ----------
@@ -353,6 +402,7 @@
     $("f-img-remove").hidden = !src;
   }
   function openProductDialog(id) {
+    loadParser().catch(() => {}); // se descarga mientras la persona llena el formulario
     const p = id ? S.products.get(id) : null;
     S.editingProductId = id; S.pendingImage = undefined;
     $("product-form").reset();
@@ -409,7 +459,7 @@
   $("product-form").addEventListener("input", (e) => { if (e.target.classList && e.target.id !== "f-url") e.target.classList.remove("autofilled"); });
   $("f-img").addEventListener("change", async () => {
     const file = $("f-img").files[0]; if (!file) return;
-    try { S.pendingImage = await shrinkImage(file, 240); setThumb(S.pendingImage); }
+    try { S.pendingImage = await shrinkImage(file, 160); setThumb(S.pendingImage); }
     catch { $("form-error").textContent = "No se pudo leer la imagen. Prueba con un JPG o PNG."; }
   });
   $("f-img-remove").addEventListener("click", () => { S.pendingImage = ""; $("f-img").value = ""; setThumb("", $("f-title").value); });
@@ -423,7 +473,8 @@
         c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
         c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
         URL.revokeObjectURL(url);
-        resolve(c.toDataURL("image/jpeg", 0.82));
+        const webp = c.toDataURL("image/webp", 0.8);
+        resolve(webp.startsWith("data:image/webp") ? webp : c.toDataURL("image/jpeg", 0.82));
       };
       img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("img")); };
       img.src = url;
@@ -446,14 +497,15 @@
     const editing = S.editingProductId;
     [$("f-submit"), $("f-save-another")].forEach((b) => { b.disabled = true; });
     try {
-      await Store.saveProduct(input, editing);
+      const savedId = await Store.saveProduct(input, editing);
+      S.cat.highlight = savedId || editing; S.cat.scrollTo = true; // mostrar dónde quedó
       const n = S.products.size;
       if (another) {
         toast(`Producto guardado (${plural(n, "producto", "productos")} en el catálogo)`);
         openProductDialog(null);
       } else {
         dlgP.close();
-        toast(editing ? "Producto actualizado" : n >= MIN() && n - 1 < MIN() ? "Catálogo listo: ya puedes armar paquetes" : `Producto agregado (${n} de ${MIN()})`);
+        toast(editing ? "Producto actualizado" : n === MIN() ? "Catálogo listo: ya puedes armar paquetes" : n < MIN() ? `Producto agregado (${n} de ${MIN()})` : "Producto agregado");
       }
     } catch (ex) { err.textContent = ex.message; updateProductForm(); }
   }
@@ -539,8 +591,8 @@
   $("f-paste").addEventListener("input", () => { S.paste = null; $("f-extract").disabled = !$("f-paste").value.trim(); });
   $("f-extract").addEventListener("click", runExtraction);
 
-  function runExtraction() {
-    if (!window.AmazonParse) return;
+  async function runExtraction() {
+    try { await loadParser(); } catch (ex) { $("form-error").textContent = ex.message; return; }
     const src = S.paste || { text: $("f-paste").value };
     const r = AmazonParse.parse(src);
     const box = $("f-auto-result");
@@ -686,7 +738,7 @@
       const ok = await confirmDialog({ title: "¿Dejar la edición?", body: `<p>Los cambios a <b>${esc(d.name || "este paquete")}</b> no se guardarán.</p>`, ok: "Dejar y crear nuevo", danger: true });
       if (!ok) return;
     }
-    S.draft = newDraft(); S.pickQ = ""; $("pick-q").value = "";
+    S.draft = newDraft(); S.pickQ = ""; S.pickLimit = 0; $("pick-q").value = "";
     loadDraftFields(); go("armar"); setTimeout(() => $("pick-q").focus({ preventScroll: true }), 50);
   }
   function editBundle(id, duplicate = false) {
@@ -698,15 +750,47 @@
       items: bundleItems(b).map((i) => ({ pid: i.pid, qty: i.qty || 1 })),
       dirty: duplicate,
     };
-    S.pickQ = ""; $("pick-q").value = "";
+    S.pickQ = ""; S.pickLimit = 0; $("pick-q").value = "";
     loadDraftFields(); go("armar");
   }
   function loadDraftFields() { $("bd-name").value = S.draft.name; $("bd-desc").value = S.draft.desc; $("bd-error").textContent = ""; }
 
+  const PICK_STEP = 40; // productos visibles en el selector; "Mostrar más" agrega otros 40
   function renderBuilder() {
     const d = S.draft; if (!d) return;
-    const min = MIN();
     d.items = d.items.filter((i) => S.products.has(i.pid));
+    renderPickList();
+    renderDraftPanel();
+  }
+
+  // Lista de la izquierda: solo se vuelve a dibujar al buscar o cuando cambian los productos.
+  function renderPickList() {
+    const d = S.draft; if (!d) return;
+    const q = norm(S.pickQ);
+    const chosen = new Set(d.items.map((i) => i.pid));
+    const all = [...S.products.values()].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    const list = all.filter((p) => !q || norm([p.title, p.asin, p.brand, p.category].join(" ")).includes(q));
+    const limit = S.pickLimit || PICK_STEP;
+    const shown = list.slice(0, limit);
+    $("pick-count").textContent = `${chosen.size} elegidos de ${all.length}`;
+    $("pick-list").innerHTML = shown.length ? shown.map((p) => {
+      const on = chosen.has(p.id);
+      const others = bundlesUsing(p.id).filter((b) => b.id !== d.id).length;
+      return `<label class="pick${on ? " on" : ""}" for="pk-${esc(p.id)}">
+        <input type="checkbox" id="pk-${esc(p.id)}" data-pid="${esc(p.id)}" ${on ? "checked" : ""}>
+        ${thumbHtml(p, 40)}
+        <span><span class="p-title">${esc(p.title)}</span><br><span class="p-meta"><span class="mono">${esc(p.asin)}</span>${p.brand ? " · " + esc(p.brand) : ""}${others ? ` · en ${plural(others, "otro paquete", "otros paquetes")}` : ""}</span></span>
+        <span class="p-price">${hasPrice(p) ? money(p.price) : "—"}</span>
+      </label>`;
+    }).join("") + (list.length > limit
+      ? `<button type="button" class="link more" data-act="more">Mostrar ${Math.min(PICK_STEP, list.length - limit)} más (quedan ${list.length - limit}) · o busca arriba</button>` : "")
+      : `<div class="empty">Ningún producto coincide.</div>`;
+  }
+
+  // Panel derecho: encabezado, elegidos, total y requisitos. Es lo que cambia al escribir o marcar.
+  function renderDraftPanel() {
+    const d = S.draft; if (!d) return;
+    const min = MIN();
     const editing = !!d.id;
     $("view-armar").classList.toggle("editing", editing);
     $("bd-mode").textContent = editing ? "Editando paquete guardado" : "Paquete nuevo";
@@ -714,22 +798,7 @@
     $("bd-title").textContent = editing ? (d.name.trim() || "Paquete sin nombre") : "Arma un paquete";
     $("bd-cancel").textContent = editing ? "Cancelar edición" : "Cancelar";
 
-    // Selector de productos
-    const q = norm(S.pickQ);
-    const chosen = new Set(d.items.map((i) => i.pid));
-    const all = [...S.products.values()].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-    const list = all.filter((p) => !q || norm([p.title, p.asin, p.brand, p.category].join(" ")).includes(q));
-    $("pick-count").textContent = `${chosen.size} elegidos de ${all.length}`;
-    $("pick-list").innerHTML = list.length ? list.map((p) => {
-      const on = chosen.has(p.id);
-      const others = bundlesUsing(p.id).filter((b) => b.id !== d.id).length;
-      return `<label class="pick${on ? " on" : ""}" for="pk-${esc(p.id)}">
-        <input type="checkbox" id="pk-${esc(p.id)}" data-pid="${esc(p.id)}" ${on ? "checked" : ""}>
-        ${thumbHtml(p)}
-        <span><span class="p-title">${esc(p.title)}</span><br><span class="p-meta"><span class="mono">${esc(p.asin)}</span>${p.brand ? " · " + esc(p.brand) : ""}${others ? ` · en ${plural(others, "otro paquete", "otros paquetes")}` : ""}</span></span>
-        <span class="p-price">${hasPrice(p) ? money(p.price) : "—"}</span>
-      </label>`;
-    }).join("") : `<div class="empty">Ningún producto coincide.</div>`;
+    $("pick-count").textContent = `${d.items.length} elegidos de ${S.products.size}`;
 
     // Productos elegidos
     $("bd-items").innerHTML = d.items.length ? d.items.map((it) => {
@@ -754,7 +823,7 @@
     $("bd-save").textContent = editing ? "Guardar cambios" : "Guardar paquete";
   }
 
-  $("pick-q").addEventListener("input", () => { S.pickQ = $("pick-q").value; renderBuilder(); });
+  $("pick-q").addEventListener("input", debounce(() => { S.pickQ = $("pick-q").value; S.pickLimit = PICK_STEP; renderPickList(); }));
   $("pick-list").addEventListener("change", (e) => {
     const cb = e.target.closest("input[data-pid]"); if (!cb || !S.draft) return;
     const pid = cb.dataset.pid;
@@ -764,20 +833,27 @@
     d.dirty = true;
     const left = MIN() - d.items.length;
     if (cb.checked) toast(left > 0 ? `Agregado · faltan ${left}` : !d.name.trim() ? "Listo: ahora escribe el nombre del paquete" : "Listo para guardar");
-    render();
+    cb.closest(".pick").classList.toggle("on", cb.checked); // solo cambia esa fila, no toda la lista
+    renderDraftPanel(); renderStepper();
+  });
+  $("pick-list").addEventListener("click", (e) => {
+    if (!e.target.closest("button[data-act='more']")) return;
+    S.pickLimit = (S.pickLimit || PICK_STEP) + PICK_STEP; renderPickList();
   });
   $("bd-items").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-act='remove']"); if (!b || !S.draft) return;
     const pid = b.closest(".bd-item").dataset.pid;
-    S.draft.items = S.draft.items.filter((i) => i.pid !== pid); S.draft.dirty = true; render();
+    S.draft.items = S.draft.items.filter((i) => i.pid !== pid); S.draft.dirty = true;
+    const cb = document.getElementById("pk-" + pid); if (cb) { cb.checked = false; cb.closest(".pick").classList.remove("on"); }
+    renderDraftPanel(); renderStepper();
   });
   $("bd-items").addEventListener("change", (e) => {
     if (e.target.dataset.act !== "qty" || !S.draft) return;
     const pid = e.target.closest(".bd-item").dataset.pid;
     const it = S.draft.items.find((i) => i.pid === pid);
-    if (it) { it.qty = Math.max(1, Math.min(99, parseInt(e.target.value, 10) || 1)); S.draft.dirty = true; renderBuilder(); }
+    if (it) { it.qty = Math.max(1, Math.min(99, parseInt(e.target.value, 10) || 1)); S.draft.dirty = true; renderDraftPanel(); }
   });
-  $("bd-name").addEventListener("input", () => { if (!S.draft) return; S.draft.name = $("bd-name").value; S.draft.dirty = true; renderBuilder(); renderStepper(); });
+  $("bd-name").addEventListener("input", () => { if (!S.draft) return; S.draft.name = $("bd-name").value; S.draft.dirty = true; renderDraftPanel(); renderStepper(); });
   $("bd-desc").addEventListener("input", () => { if (!S.draft) return; S.draft.desc = $("bd-desc").value; S.draft.dirty = true; });
 
   $("bd-cancel").addEventListener("click", async () => {
@@ -845,7 +921,8 @@
   }
 
   function renderBundles() {
-    if (!S.ready) { $("bun-list").innerHTML = `<div class="empty">Cargando paquetes…</div>`; return; }
+    if (!S.ready) { $("bun-list").innerHTML = skeletonRows(5, "bun"); $("bun-list").setAttribute("aria-busy", "true"); return; }
+    $("bun-list").removeAttribute("aria-busy");
     const all = filteredBundles();
     const ro = Store.readOnly && Store.readOnly();
     if (!S.bundles.size) {
@@ -903,7 +980,7 @@
     }).join("");
   }
 
-  $("bun-q").addEventListener("input", () => { S.bun.q = $("bun-q").value; S.bun.page = 1; S.bun.highlight = null; renderBundles(); });
+  $("bun-q").addEventListener("input", debounce(() => { S.bun.q = $("bun-q").value; S.bun.page = 1; S.bun.highlight = null; renderBundles(); }));
   $("bun-sort").addEventListener("change", () => { S.bun.sort = $("bun-sort").value; S.bun.page = 1; S.bun.highlight = null; renderBundles(); });
   $("btn-new-bundle").addEventListener("click", startNewBundle);
 
@@ -937,13 +1014,21 @@
         ok: "Eliminar paquete", danger: true,
       });
       if (!ok) return;
+      // Interfaz optimista con reversión
+      const before = new Map(S.bundles);
+      S.bundles.delete(id);
+      S.bun.open.delete(id);
+      if (S.bun.highlight === id) { S.bun.highlight = null; $("bun-callout").hidden = true; }
+      if (S.draft && S.draft.id === id) S.draft = null;
+      render();
+      toast("Paquete eliminado");
       try {
         await Store.deleteBundle(id);
-        S.bun.open.delete(id);
-        if (S.bun.highlight === id) { S.bun.highlight = null; $("bun-callout").hidden = true; }
-        if (S.draft && S.draft.id === id) S.draft = null;
-        toast("Paquete eliminado");
-      } catch (ex) { toast(ex.message); }
+      } catch (ex) {
+        S.bundles = before;
+        render();
+        toast(`No se pudo eliminar; se restauró. ${ex.message}`);
+      }
     }
   });
 

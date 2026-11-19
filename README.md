@@ -151,3 +151,36 @@ Para obtener acceso se necesita una cuenta aprobada de Amazon Associates con al 
 - Los precios son de referencia y se capturan a mano; Amazon cobra el precio vigente al comprar.
 - Usa fotos propias. Las imágenes de Amazon solo deben mostrarse a través de su API.
 - Verifica en tu panel de Associates que el botón "Agregar todo al carrito" registre la comisión.
+
+## Rendimiento
+
+Medido con Lighthouse en perfil móvil (60 productos con foto y 24 paquetes):
+
+| Métrica | Antes | Después |
+|---|---|---|
+| Puntaje (4G lento) | 76 | 100 |
+| LCP (4G lento) | 5.9 s | 1.5 s |
+| LCP (celular de gama baja + red tipo 3G) | 13.0 s | 3.1 s |
+| CLS | 0.096 | 0 |
+| Peso de la carga inicial | 972 KB | 247 KB |
+| Respuesta de datos (`r=state`) | 828 KB sin comprimir | 4 KB con Brotli; 0 bytes (304) si no cambió |
+| Consultas SQL por petición | ~14 | 6 |
+
+Qué se hizo:
+
+- **Servidor:** las fotos ya no viajan dentro del JSON (`api.php?r=image`, caché de un año, la URL cambia al editar);
+  `GET r=state` con ETag/304; columnas explícitas; el chequeo de tablas corre solo cuando cambia
+  `SCHEMA_VERSION` (`lib/db.php`); índices en `bundle_items(product_id)` y `products(category)`;
+  conexión con tiempo límite de 5 s; encabezado `Server-Timing` y registro de peticiones de más de 500 ms;
+  importación en una sola transacción.
+- **Apache (`.htaccess`):** Brotli con Gzip de respaldo (incluye JSON); caché de un año para archivos
+  versionados y fuentes; la página siempre se revalida. En Docker, `docker/version-assets.php` agrega `?v=huella`.
+- **Interfaz:** pantalla de carga con el encabezado real y esqueletos; anchos reservados (CLS 0);
+  fuentes propias en `assets/fonts/` (5 archivos, sin Google); scripts `defer`; el lector de Amazon se
+  descarga al abrir "Agregar producto"; búsquedas con pausa de 250 ms; datos pedidos en paralelo con la
+  sesión y sin peticiones duplicadas; tiempo límite de 15 s por petición; borrado optimista con reversión;
+  fotos nuevas en WebP de 160 px con `width`/`height` y `loading="lazy"`; el armador muestra 40 productos
+  y “Mostrar más”; escribir o marcar en el armador ya no redibuja la lista completa.
+
+Para revisar una petición lenta: Coolify → Runtime Logs (busca `petición lenta`), o en el navegador
+DevTools → Network → la petición → Timing (`Server-Timing`).

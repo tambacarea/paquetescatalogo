@@ -5,6 +5,12 @@
 
 require_once __DIR__ . '/../config.php';
 
+/**
+ * Versión del esquema. El chequeo/creación de tablas solo corre cuando esta cifra cambia
+ * (antes corría en cada petición: ~10 consultas extra). Súbela al cambiar install_schema().
+ */
+const SCHEMA_VERSION = '4';
+
 function db(): PDO
 {
     static $pdo = null;
@@ -16,6 +22,7 @@ function db(): PDO
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         PDO::ATTR_EMULATE_PREPARES => false,
+        PDO::ATTR_TIMEOUT => 5, // segundos para conectar: si la base no responde, falla rápido
     ];
 
     if (DB_DRIVER === 'sqlite') {
@@ -26,16 +33,36 @@ function db(): PDO
         $pdo = new PDO('sqlite:' . SQLITE_PATH, null, null, $options);
         $pdo->exec('PRAGMA journal_mode = WAL');
     } else {
-        // Conecta al servidor, crea la base si no existe y la selecciona.
-        $dsn = sprintf('mysql:host=%s;port=%d;charset=utf8mb4', DB_HOST, DB_PORT);
-        $pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
-        $name = str_replace('`', '', DB_NAME);
-        $pdo->exec("CREATE DATABASE IF NOT EXISTS `$name` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
-        $pdo->exec("USE `$name`");
+        // Conecta directo a la base. Solo si no existe (error 1049, típico la primera vez en Laragon) la crea.
+        $base = sprintf('mysql:host=%s;port=%d;charset=utf8mb4', DB_HOST, DB_PORT);
+        try {
+            $pdo = new PDO($base . ';dbname=' . DB_NAME, DB_USER, DB_PASS, $options);
+        } catch (PDOException $e) {
+            if ((int) ($e->errorInfo[1] ?? 0) !== 1049 && strpos($e->getMessage(), '1049') === false) {
+                throw $e;
+            }
+            $pdo = new PDO($base, DB_USER, DB_PASS, $options);
+            $name = str_replace('`', '', DB_NAME);
+            $pdo->exec("CREATE DATABASE IF NOT EXISTS `$name` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+            $pdo->exec("USE `$name`");
+        }
     }
 
-    install_schema($pdo);
+    if (schema_version($pdo) !== SCHEMA_VERSION) {
+        install_schema($pdo);
+        set_setting($pdo, 'schema_version', SCHEMA_VERSION);
+    }
     return $pdo;
+}
+
+/** Versión del esquema instalada, o null si aún no existe la tabla settings. */
+function schema_version(PDO $pdo): ?string
+{
+    try {
+        return get_setting($pdo, 'schema_version');
+    } catch (PDOException $e) {
+        return null;
+    }
 }
 
 function install_schema(PDO $pdo): void
@@ -101,6 +128,10 @@ function install_schema(PDO $pdo): void
         'about' => 'TEXT NULL',
     ]);
 
+    // Índices para las consultas frecuentes (borrar un producto de los paquetes, filtrar/renombrar categoría)
+    add_missing_index($pdo, 'bundle_items', 'idx_bundle_items_product', 'product_id');
+    add_missing_index($pdo, 'products', 'idx_products_category', 'category');
+
     if (SEED_EXAMPLES && get_setting($pdo, 'seeded') === null) {
         seed_examples($pdo);
         set_setting($pdo, 'seeded', '1');
@@ -112,6 +143,19 @@ function install_schema(PDO $pdo): void
     if (SEED_EXAMPLES && get_setting($pdo, 'seeded_vitamix') === null) {
         seed_vitamix($pdo);
         set_setting($pdo, 'seeded_vitamix', '1');
+    }
+}
+
+function add_missing_index(PDO $pdo, string $table, string $name, string $columns): void
+{
+    if (DB_DRIVER === 'sqlite') {
+        $pdo->exec("CREATE INDEX IF NOT EXISTS $name ON $table ($columns)");
+        return;
+    }
+    $st = $pdo->prepare('SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?');
+    $st->execute([$table, $name]);
+    if ((int) $st->fetchColumn() === 0) {
+        $pdo->exec("CREATE INDEX $name ON $table ($columns)");
     }
 }
 

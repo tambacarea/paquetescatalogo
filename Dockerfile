@@ -4,8 +4,11 @@ FROM php:8.3-apache
 
 RUN docker-php-ext-install pdo_mysql \
  && cp "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini" \
- && a2enmod remoteip headers
+ && a2enmod remoteip headers brotli \
+ && sed -i '/AddOutputFilterByType/d' /etc/apache2/mods-available/deflate.conf
 
+# La compresión la define .htaccess (Brotli primero, Gzip de respaldo); se quita la lista
+# predeterminada de Gzip para que no se adelante a Brotli.
 # Apache detrás del proxy de Coolify: IP real del visitante, HTTPS y .htaccess
 COPY docker/apache.conf /etc/apache2/conf-available/pqc.conf
 RUN a2enconf pqc
@@ -15,6 +18,7 @@ COPY . /var/www/html/
 # config.php pasa a leer variables de entorno (en Laragon no cambia nada).
 # Las herramientas de despliegue salen de la carpeta pública.
 RUN php /var/www/html/docker/env-config.php /var/www/html/config.php \
+ && php /var/www/html/docker/version-assets.php /var/www/html \
  && mkdir -p /opt/pqc \
  && mv /var/www/html/docker/set-admin-password.php /opt/pqc/ \
  && mv /var/www/html/docker/entrypoint.sh /usr/local/bin/pqc-entrypoint \

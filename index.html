@@ -4,12 +4,41 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Armador de paquetes Amazon</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- Fuentes servidas desde el propio dominio (sin Google); se precargan las dos del primer pintado -->
+<link rel="preload" href="assets/fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/bricolage-grotesque-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin>
+<meta name="pqc-parser" content="assets/amazon-parse.js">
 <!--STYLE--><link rel="stylesheet" href="assets/app.css"><!--/STYLE-->
 </head>
 <body>
+<!-- Encabezado único: se pinta una sola vez al cargar (contenido principal visible desde el primer pintado) -->
+<div class="wrap topbar" id="topbar">
+  <header class="top">
+    <div class="app-title">
+      <h1>Armador de paquetes Amazon</h1>
+      <p class="lede">Productos de amazon.com agrupados en paquetes de 3 o más, con tus enlaces de afiliado.</p>
+    </div>
+    <div class="top-right">
+      <span class="chip" id="chip-sync"><span class="dot"></span><b>Conectando…</b></span>
+      <button type="button" class="chip chip-btn" id="btn-settings" title="Tag de afiliado e importación">
+        <span class="dot" id="tag-dot"></span><span id="tag-chip">Tag de afiliado</span> · Ajustes
+      </button>
+      <button type="button" class="chip chip-btn" id="btn-logout">Cerrar sesión</button>
+    </div>
+  </header>
+</div>
+
+<!-- Pantalla de carga: forma del contenido hasta saber si hay sesión -->
+<div class="wrap boot" id="boot" aria-busy="true" aria-label="Cargando">
+
+  <div class="stepper sk-stepper" aria-hidden="true"><span class="sk"></span><span class="sk"></span><span class="sk"></span></div>
+  <div class="list" aria-hidden="true">
+    <div class="row sk-row prod"><span class="sk sk-thumb"></span><span class="sk-lines"><span class="sk sk-line w70"></span><span class="sk sk-line w40"></span></span><span class="sk sk-pill"></span></div>
+    <div class="row sk-row prod"><span class="sk sk-thumb"></span><span class="sk-lines"><span class="sk sk-line w70"></span><span class="sk sk-line w40"></span></span><span class="sk sk-pill"></span></div>
+    <div class="row sk-row prod"><span class="sk sk-thumb"></span><span class="sk-lines"><span class="sk sk-line w70"></span><span class="sk sk-line w40"></span></span><span class="sk sk-pill"></span></div>
+    <div class="row sk-row prod"><span class="sk sk-thumb"></span><span class="sk-lines"><span class="sk sk-line w70"></span><span class="sk sk-line w40"></span></span><span class="sk sk-pill"></span></div>
+  </div>
+</div>
 <!-- Pantalla de acceso: toda la página pide contraseña (assets/auth.js) -->
 <main class="login" id="login-screen" hidden>
   <form id="login-form" class="login-card stack" novalidate>
@@ -28,19 +57,7 @@
 
 <div class="wrap" id="app" hidden>
 
-  <header class="top">
-    <div>
-      <h1>Armador de paquetes Amazon</h1>
-      <p class="lede">Productos de amazon.com agrupados en paquetes de 3 o más, con tus enlaces de afiliado.</p>
-    </div>
-    <div class="top-right">
-      <span class="chip" id="chip-sync"><span class="dot"></span><b>Conectando…</b></span>
-      <button type="button" class="chip chip-btn" id="btn-settings" title="Tag de afiliado e importación">
-        <span class="dot" id="tag-dot"></span><span id="tag-chip">Tag de afiliado</span> · Ajustes
-      </button>
-      <button type="button" class="chip chip-btn" id="btn-logout">Cerrar sesión</button>
-    </div>
-  </header>
+
 
   <div class="banner" id="banner" role="alert" hidden></div>
 
@@ -324,9 +341,8 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<!--SCRIPTS--><script src="assets/amazon-parse.js"></script>
-<script src="assets/auth.js"></script>
-<script src="assets/store-api.js"></script>
-<script src="assets/app.js"></script><!--/SCRIPTS-->
+<!--SCRIPTS--><script src="assets/auth.js" defer></script>
+<script src="assets/store-api.js" defer></script>
+<script src="assets/app.js" defer></script><!--/SCRIPTS-->
 </body>
 </html>

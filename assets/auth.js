@@ -14,15 +14,22 @@ window.PaquetesAuth = (() => {
 
   async function req(method, r, body) {
     let res;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000); // tiempo límite: no dejar la pantalla esperando
     try {
       res = await fetch(`${API}?r=${r}`, {
         method,
         credentials: "same-origin",
         headers: { "Content-Type": "application/json", ...headers() },
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: ctrl.signal,
       });
-    } catch (_) {
-      throw new Error("No hay respuesta del servidor. Revisa que Apache esté iniciado en Laragon.");
+    } catch (e) {
+      throw new Error(e && e.name === "AbortError"
+        ? "El servidor tardó demasiado en responder. Revisa tu conexión e intenta de nuevo."
+        : "No hay respuesta del servidor. Revisa tu conexión (o que Apache esté iniciado en Laragon).");
+    } finally {
+      clearTimeout(timer);
     }
     const data = await res.json().catch(() => null);
     if (!res.ok || !data) throw new Error((data && data.error) || `El servidor respondió con error ${res.status}.`);
@@ -38,8 +45,13 @@ window.PaquetesAuth = (() => {
     error: { lede: "", btn: "Reintentar" },
   };
 
+  // Pantalla de carga inicial (esqueleto en index.html): se retira en cuanto se sabe qué mostrar.
+  function hideBoot() { const b = $("boot"); if (b) b.remove(); }
+
   function showScreen(nextMode, message) {
     mode = nextMode;
+    hideBoot();
+    $("topbar").hidden = true; // la pantalla de acceso tiene su propio título
     $("app").hidden = true;
     $("login-screen").hidden = false;
     $("login-lede").textContent = TEXT[mode].lede;
@@ -56,6 +68,8 @@ window.PaquetesAuth = (() => {
   }
 
   function hideScreen() {
+    hideBoot();
+    $("topbar").hidden = false;
     $("login-screen").hidden = true;
     $("app").hidden = false;
     $("login-form").reset();

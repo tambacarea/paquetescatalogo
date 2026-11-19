@@ -1,0 +1,30 @@
+# Rendimiento — funciona igual en Laragon y en Docker/Coolify (Apache 2.4).
+
+# Compresión de texto: Brotli si el navegador lo acepta, si no Gzip.
+# (Apache no comprimía JSON: la respuesta del API viajaba completa.)
+<IfModule mod_brotli.c>
+  AddOutputFilterByType BROTLI_COMPRESS text/html text/css text/plain text/javascript application/javascript application/json image/svg+xml
+</IfModule>
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/css text/plain text/javascript application/javascript application/json image/svg+xml
+</IfModule>
+
+<IfModule mod_mime.c>
+  AddType font/woff2 .woff2
+</IfModule>
+
+# Caché del navegador
+<IfModule mod_headers.c>
+  # Archivos con versión en la URL (assets/app.js?v=…): un año, nunca cambian con esa URL.
+  <If "%{REQUEST_URI} =~ m#/assets/# && %{QUERY_STRING} =~ /(^|&)v=/">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </If>
+  # Fuentes: el nombre del archivo ya identifica la versión.
+  <FilesMatch "\.woff2$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+  # La página siempre se revalida para tomar las versiones nuevas de los archivos.
+  <If "%{REQUEST_URI} =~ m#/$# || %{REQUEST_URI} =~ m#\.html$#">
+    Header set Cache-Control "no-cache"
+  </If>
+</IfModule>

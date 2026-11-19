@@ -11,6 +11,10 @@
  *   DELETE api.php?r=category&id=…         Eliminar una categoría (sus productos quedan sin categoría)
  *   POST   api.php?r=config                Guardar el tag de afiliado
  *   POST   api.php?r=import                Importar una lista de productos (JSON)
+ *   GET    api.php?r=image&id=…&v=…        Foto de un producto (caché larga; v cambia al editarla)
+ *
+ * Rendimiento: el estado no incluye las fotos (van por r=image), GET r=state responde 304
+ * si no hubo cambios (ETag), y cada respuesta trae Server-Timing; las lentas se registran.
  *
  * Acceso (lib/auth.php). Son las únicas rutas que no piden sesión:
  *   GET    api.php?r=session               ¿Hay sesión? ¿Falta crear la contraseña? + token CSRF
@@ -26,6 +30,9 @@
 require_once __DIR__ . '/lib/db.php';
 require_once __DIR__ . '/lib/auth.php';
 
+$GLOBALS['pqc_t0'] = microtime(true);
+const SLOW_REQUEST_MS = 500; // peticiones más lentas se registran en el log de PHP
+
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
 
@@ -39,10 +46,40 @@ class ApiError extends Exception
     }
 }
 
-function respond($data, int $status = 200): void
+function timing(): float
 {
+    return (microtime(true) - $GLOBALS['pqc_t0']) * 1000;
+}
+
+function log_if_slow(float $ms): void
+{
+    if ($ms > SLOW_REQUEST_MS) {
+        error_log(sprintf('[paquetescatalogo] petición lenta %.0f ms: %s %s',
+            $ms, $_SERVER['REQUEST_METHOD'] ?? '', $_SERVER['QUERY_STRING'] ?? ''));
+    }
+}
+
+/**
+ * Envía JSON. Con $etag = true (lecturas), responde 304 sin cuerpo si el navegador
+ * ya tiene exactamente estos datos (If-None-Match), y permite revalidar en vez de descargar.
+ */
+function respond($data, int $status = 200, bool $etag = false): void
+{
+    $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($etag && $status === 200) {
+        $tag = '"' . substr(hash('sha256', $json), 0, 32) . '"';
+        header('ETag: ' . $tag);
+        header('Cache-Control: private, no-cache');
+        if (trim($_SERVER['HTTP_IF_NONE_MATCH'] ?? '') === $tag) {
+            $status = 304;
+            $json = '';
+        }
+    }
+    $ms = timing();
+    header(sprintf('Server-Timing: app;desc="PHP";dur=%.1f', $ms));
+    log_if_slow($ms);
     http_response_code($status);
-    echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    echo $json;
     exit;
 }
 
@@ -113,7 +150,10 @@ function parse_price($v): ?float
 function state(PDO $pdo): array
 {
     $products = [];
-    foreach ($pdo->query('SELECT * FROM products ORDER BY created_at ASC') as $r) {
+    // Solo las columnas que usa la interfaz. La foto no viaja aquí: se pide aparte por r=image.
+    $cols = 'id, asin, title, price, category, notes, brand, color, feature, capacity, dimensions, about,
+             source, is_example, created_at, updated_at, (image IS NOT NULL AND image <> \'\') AS has_image';
+    foreach ($pdo->query("SELECT $cols FROM products ORDER BY created_at ASC") as $r) {
         $products[] = [
             'id' => $r['id'],
             'asin' => $r['asin'],
@@ -127,7 +167,7 @@ function state(PDO $pdo): array
             'capacity' => $r['capacity'],
             'dimensions' => $r['dimensions'],
             'about' => $r['about'] ?? '',
-            'image' => $r['image'],
+            'image' => $r['has_image'] ? 'api.php?r=image&id=' . rawurlencode($r['id']) . '&v=' . (int) $r['updated_at'] : null,
             'source' => $r['source'],
             'example' => (bool) $r['is_example'],
             'createdAt' => (int) $r['created_at'],
@@ -141,7 +181,7 @@ function state(PDO $pdo): array
     }
 
     $bundles = [];
-    foreach ($pdo->query('SELECT * FROM bundles ORDER BY created_at DESC') as $r) {
+    foreach ($pdo->query('SELECT id, name, description, is_example, created_at, updated_at FROM bundles ORDER BY created_at DESC') as $r) {
         $bundles[] = [
             'id' => $r['id'],
             'name' => $r['name'],
@@ -321,6 +361,34 @@ function delete_bundle(PDO $pdo, $id): void
     $pdo->commit();
 }
 
+/* ---------- Fotos ---------- */
+
+/** Envía la foto como archivo binario con caché larga; la URL cambia (v=) cuando se edita el producto. */
+function send_image(PDO $pdo, $id): void
+{
+    if (!valid_id($id)) {
+        throw new ApiError('Identificador de producto inválido.');
+    }
+    $st = $pdo->prepare('SELECT image, updated_at FROM products WHERE id = ?');
+    $st->execute([$id]);
+    $row = $st->fetch();
+    if (!$row || !preg_match('~^data:(image/(?:jpeg|png|webp));base64,(.+)$~s', (string) $row['image'], $m)) {
+        throw new ApiError('Ese producto no tiene foto.', 404);
+    }
+    $etag = '"img-' . (int) $row['updated_at'] . '"';
+    header_remove('Content-Type');
+    header('Content-Type: ' . $m[1]);
+    header('Cache-Control: private, max-age=31536000, immutable');
+    header('ETag: ' . $etag);
+    header(sprintf('Server-Timing: app;desc="PHP";dur=%.1f', timing()));
+    if (trim($_SERVER['HTTP_IF_NONE_MATCH'] ?? '') === $etag) {
+        http_response_code(304);
+        exit;
+    }
+    echo base64_decode($m[2]);
+    exit;
+}
+
 /* ---------- Categorías ---------- */
 
 function save_category(PDO $pdo, array $in): string
@@ -402,7 +470,7 @@ try {
         error_log('[paquetescatalogo] ' . $e->getMessage());
         throw new ApiError(DB_DRIVER === 'sqlite'
             ? 'No se pudo abrir la base SQLite. Revisa que la carpeta data/ tenga permisos de escritura.'
-            : 'No se pudo conectar a MySQL. Inicia MySQL en Laragon ("Start All") y revisa usuario y contraseña en config.php.', 503);
+            : 'No se pudo conectar a MySQL. En Laragon: inicia MySQL ("Start All"). En el servidor: revisa DB_HOST, DB_USER y DB_PASS.', 503);
     }
 
     /* ---------- Acceso ---------- */
@@ -433,7 +501,11 @@ try {
     }
 
     if ($method === 'GET' && $r === 'state') {
-        respond(state($pdo));
+        respond(state($pdo), 200, true);
+    }
+
+    if ($method === 'GET' && $r === 'image') {
+        send_image($pdo, $_GET['id'] ?? null);
     }
 
     if ($method === 'POST' && $r === 'product') {
@@ -484,6 +556,7 @@ try {
         }
         $added = 0;
         $skipped = 0;
+        $pdo->beginTransaction(); // una sola escritura a disco para todo el lote
         foreach ($list as $raw) {
             if (!is_array($raw)) {
                 $skipped++;
@@ -508,6 +581,7 @@ try {
                 $skipped++;
             }
         }
+        $pdo->commit();
         respond(['added' => $added, 'skipped' => $skipped, 'state' => state($pdo)]);
     }
 

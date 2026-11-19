@@ -1,31 +1,60 @@
-/* Almacén de datos para Laragon: habla con api.php (MySQL o SQLite).
+/* Almacén de datos para Laragon / Coolify: habla con api.php (MySQL o SQLite).
  * Interfaz común que usa app.js:
  *   init(onData, onStatus), saveProduct(input, id), deleteProduct(id), saveBundle(input, id),
  *   deleteBundle(id), saveConfig(tag), saveCategory(name, id, oldName), deleteCategory(id, name),
  *   importProducts(list), readOnly()
+ *
+ * Rendimiento:
+ *  - Cada petición tiene tiempo límite (REQUEST_TIMEOUT_MS) y un mensaje claro si se agota.
+ *  - Una sola lectura del estado en vuelo a la vez: llamadas simultáneas comparten la misma promesa.
+ *  - Si el servidor devuelve el mismo ETag (sin cambios), no se vuelve a dibujar la página.
+ *  - Al volver a la pestaña recarga, pero no más de una vez cada RELOAD_MIN_MS.
+ *  - Al arrancar, el estado se pide en paralelo con la comprobación de sesión.
  */
 window.PaquetesStore = (() => {
   "use strict";
   const API = "api.php";
+  const REQUEST_TIMEOUT_MS = 15000;
+  const RELOAD_MIN_MS = 30000;
   let onData = () => {};
   let onStatus = () => {};
+  let lastEtag = null;
+  let lastLoad = 0;
+  let inflightState = null;
 
   const Auth = window.PaquetesAuth;
+
+  async function fetchWithTimeout(url, opts) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      return await fetch(url, { ...opts, signal: ctrl.signal });
+    } catch (e) {
+      if (e && e.name === "AbortError") throw new Error("El servidor tardó demasiado en responder. Revisa tu conexión e intenta de nuevo.");
+      throw new Error("No hay respuesta del servidor. Revisa tu conexión (o que Apache esté iniciado en Laragon).");
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function deliver(state, etag) {
+    lastLoad = Date.now();
+    if (etag && etag === lastEtag) return; // mismos datos: no se redibuja
+    lastEtag = etag || null;
+    onData(state);
+    const label = state.config && state.config.driver === "sqlite" ? "SQLite" : "MySQL";
+    onStatus({ kind: "ok", label: `Guardado en ${label}`, message: "" });
+  }
 
   async function call(method, route, { id, body, query } = {}, retried = false) {
     const qs = new URLSearchParams({ r: route, ...(query || {}) });
     if (id) qs.set("id", id);
-    let res;
-    try {
-      res = await fetch(`${API}?${qs}`, {
-        method,
-        credentials: "same-origin",
-        headers: { ...(body !== undefined ? { "Content-Type": "application/json" } : {}), ...Auth.headers() },
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-      });
-    } catch (_) {
-      throw new Error("No hay respuesta del servidor. Revisa que Apache esté iniciado en Laragon.");
-    }
+    const res = await fetchWithTimeout(`${API}?${qs}`, {
+      method,
+      credentials: "same-origin",
+      headers: { ...(body !== undefined ? { "Content-Type": "application/json" } : {}), ...Auth.headers() },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
     // Sesión vencida (401) o token desactualizado (403): pide la contraseña o renueva el token y reintenta una vez.
     if ((res.status === 401 || res.status === 403) && !retried) {
       await (res.status === 401 ? Auth.expired() : Auth.ensure());
@@ -36,18 +65,31 @@ window.PaquetesStore = (() => {
     if (!res.ok || !data) {
       throw new Error((data && data.error) || `El servidor respondió con error ${res.status}. ¿Abriste la página desde http://localhost y no como archivo?`);
     }
-    const state = data.state || (route === "state" ? data : null);
-    if (state) {
-      onData(state);
-      const label = state.config && state.config.driver === "sqlite" ? "SQLite" : "MySQL";
-      onStatus({ kind: "ok", label: `Guardado en ${label}`, message: "" });
-    }
+    if (data.state) deliver(data.state, null);              // escrituras: siempre traen datos nuevos
+    else if (route === "state") deliver(data, res.headers.get("ETag"));
     return data;
   }
 
+  // Lectura del estado: si ya hay una en curso, se reutiliza en lugar de pedirla otra vez.
+  function loadState() {
+    if (!inflightState) {
+      inflightState = call("GET", "state").finally(() => { inflightState = null; });
+    }
+    return inflightState;
+  }
+
   async function reload() {
-    try { await call("GET", "state"); }
+    try { await loadState(); }
     catch (e) { onStatus({ kind: "bad", label: "Sin conexión", message: e.message }); }
+  }
+
+  // Petición anticipada del estado (sin pedir contraseña si falla): corre en paralelo con la sesión.
+  async function earlyState() {
+    try {
+      const res = await fetchWithTimeout(`${API}?r=state`, { credentials: "same-origin" });
+      if (!res.ok) return null;
+      return { data: await res.json(), etag: res.headers.get("ETag") };
+    } catch (_) { return null; }
   }
 
   return {
@@ -55,10 +97,15 @@ window.PaquetesStore = (() => {
     async init(dataCb, statusCb) {
       onData = dataCb; onStatus = statusCb;
       onStatus({ kind: "wait", label: "Conectando…" });
-      await Auth.ensure();
-      await reload();
-      // Al volver a la pestaña, recarga por si otra persona hizo cambios.
-      window.addEventListener("focus", reload);
+      const early = earlyState();         // empieza ya…
+      await Auth.ensure();                // …mientras se confirma la sesión
+      const got = await early;
+      if (got && got.data && Array.isArray(got.data.products)) deliver(got.data, got.etag);
+      else await reload();                // sin sesión al inicio: se pide después del acceso
+      // Al volver a la pestaña, recarga por si otra persona hizo cambios (como máximo cada 30 s).
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible" && Date.now() - lastLoad > RELOAD_MIN_MS) reload();
+      });
     },
     async saveProduct(input, id) {
       const body = { ...input };
